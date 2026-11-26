@@ -1,37 +1,43 @@
 name: Import verified CORTEX APK
 on:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/import-apk.yml'
   workflow_dispatch:
 permissions:
-  contents: write
+  contents: read
 concurrency:
   group: import-apk-v0.0.1
   cancel-in-progress: false
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
+    permissions:
+      contents: write
     steps:
-      - name: Download official release and verify exact bytes
+      - name: Read the approved immutable signing asset
+        env:
+          GH_TOKEN: ${{ secrets.CORTEX_SOURCE_RELEASE_READ_TOKEN }}
+          SOURCE_REPO: ${{ secrets.CORTEX_SOURCE_RELEASE_REPO }}
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --silent --show-error --location --max-redirs 5 --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 90 --max-filesize 20000000 https://cortexapp.ru/api/android-download --output CORTEX-0.0.1.apk
+          test -n "$GH_TOKEN"
+          gh api -H 'Accept: application/octet-stream' "repos/$SOURCE_REPO/releases/assets/792538770" > CORTEX-0.0.1.apk
           test "$(wc -c < CORTEX-0.0.1.apk)" -eq 19204271
           printf '%s  %s\n' 'a170bd09ed1dcac29b98d888246ee7491e1e330243a11bc3a657d37507a90091' 'CORTEX-0.0.1.apk' > SHA256SUMS.txt
           sha256sum --check SHA256SUMS.txt
-      - name: Publish verified asset
-        shell: bash
+      - name: Publish or verify the existing exact asset
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+        shell: bash
         run: |
           set -euo pipefail
           if gh release view v0.0.1 --repo "$GH_REPO" >/dev/null 2>&1; then
-            echo "Release already exists; refusing to replace any assets."
-            exit 1
+            mkdir previous
+            gh release download v0.0.1 --repo "$GH_REPO" --pattern CORTEX-0.0.1.apk --pattern SHA256SUMS.txt --dir previous
+            cmp CORTEX-0.0.1.apk previous/CORTEX-0.0.1.apk
+            cmp SHA256SUMS.txt previous/SHA256SUMS.txt
+          else
+            gh release create v0.0.1 CORTEX-0.0.1.apk SHA256SUMS.txt --repo "$GH_REPO" --target "$GITHUB_SHA" --title "CORTEX 0.0.1 Alpha" --notes "Official signed CORTEX Android release." --prerelease
           fi
-          gh release create v0.0.1 CORTEX-0.0.1.apk SHA256SUMS.txt --repo "$GH_REPO" --target "$GITHUB_SHA" --title "CORTEX 0.0.1 Alpha" --notes "Official signed CORTEX Android release. SHA-256 verified against the original build." --prerelease
